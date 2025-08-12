@@ -61,6 +61,8 @@ export class Client {
     // Ask the device to sign a permit for this owner
     console.log('Signing permit message with device key...');
     const { v, r, s, hash, uri } = await this.device.signPermit(ownerWallet.address);
+    console.log('Signed permit:');
+    console.log(JSON.stringify({ v, r, s, hash, uri }, null, 2));
 
     // Device contract and token ID come from environment
     const deviceContract = process.env.DEVICE_CONTRACT_ADDRESS;
@@ -87,6 +89,7 @@ export class Client {
       console.warn('IOID_STORE is not set.');
       return;
     }
+    console.log(`Using IOID store at: ${IOID_STORE}`);
     const STORE_ABI = [
       'function price() view returns (uint256)',
       'function deviceContractProject(address) view returns (uint256)'
@@ -205,6 +208,8 @@ export class Client {
       uri,
       v, r, s
     ]);
+
+    console.log('Hash: ', hash);
 
     const ifaceExplicit = new ethers.Interface([
       'function register(address deviceContract,uint256 tokenId,address user,address device,bytes32 hash,string uri,uint8 v,bytes32 r,bytes32 s)'
