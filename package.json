@@ -1,0 +1,14 @@
+{
+  "name": "delivery-drone-simulator",
+  "version": "1.0.0",
+  "description": "Delivery drone device simulator for ioID",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "ts-node src/client/index.ts"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.1",
+    "typescript": "^5.2.2"
+  }
+}
