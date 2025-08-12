@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug Drone Client",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "ts-node",
+        "--transpile-only",
+        "src/client/index.ts"
+      ],
+      "envFile": "${workspaceFolder}/.env",
+      "cwd": "${workspaceFolder}",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "console": "integratedTerminal",
+      "outputCapture": "std"
+    }
+  ]
+}
