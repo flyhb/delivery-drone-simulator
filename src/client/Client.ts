@@ -6,6 +6,7 @@ import {
   discoverOwnedChoicesFromStore,
   readPriceWei
 } from './deviceNFTDiscovery';
+import { selectWithArrows, shortAddr } from './ui';
 
 export class Client {
   private initialized = false;
@@ -19,7 +20,7 @@ export class Client {
 
   private async init(): Promise<void> {
     if (this.initialized) return;
-        
+
     this.registry = await getRegistry(this.provider);
     this.device = new Device(this.provider, this.registry);
 
@@ -59,27 +60,32 @@ export class Client {
       return;
     }
 
-    console.log('\nYour Device NFTs:');
-    choices.forEach((c, idx) => {
-      const name = c.projectName ? ` — ${c.projectName}` : '';
-      console.log(`[${idx + 1}] ${c.contract}  #${c.tokenId.toString()}  (project ${c.projectId.toString()}${name})`);
-    });
+    // Build pretty menu items and let user pick via arrows (fallback to numeric inside selectWithArrows)
+    const items = choices.map((c) => ({
+      label: `${c.projectName ?? 'Unnamed Project'} (ID:${c.projectId.toString()}) - ${c.nftName ?? 'DeviceNFT'}${c.nftSymbol ? ` (${c.nftSymbol})` : ''} ${shortAddr(c.contract)} - #${c.tokenId.toString()}`,
+      value: c
+    }));
 
-    let idx = -1;
-    while (idx < 0 || idx >= choices.length) {
-      const ans = await this.ask('Select NFT to register (number): ');
-      const n = Number(ans);
-      if (Number.isInteger(n) && n >= 1 && n <= choices.length) idx = n - 1;
-    }
-    const pick = choices[idx];
+    const pick = await selectWithArrows('Select the Device NFT to register', items);
 
+    console.log(`\nYou picked:\n  Project: ${pick.projectName ?? 'Unnamed'} (ID: ${pick.projectId})\n  Device NFT: ${pick.nftName ?? 'DeviceNFT'} (${pick.nftSymbol})\n  Contract: ${shortAddr(pick.contract)}\n  Token ID: #${pick.tokenId}\n`);
+
+    console.log('Requesting signature to the drone...');
     // Device signs permit for this owner
     const { v, r, s, hash, uri } = await this.device.signPermit(ownerWallet.address);
 
     // Resolve price (prefer on-chain store; fallback to IOID_PRICE env)
+    console.log(`Checking registration price on-chain...`);
     let value = await readPriceWei(this.provider, IOID_STORE);
-    if (value === 0n) value = ethers.parseEther(process.env.IOID_PRICE || '0');
-
+    if (value === 0n) {
+      console.log('No price found on-chain. Using IOID_PRICE from environment.');
+      value = ethers.parseEther(process.env.IOID_PRICE || '0');
+    }
+    if (value === 0n) {
+      console.log('No price set. Registration will be free.');
+    } else {
+      console.log(`Registration price: ${ethers.formatEther(value)} ETH`);
+    }
     // Ensure approval for registry to move selected token
     const registryAddress = this.registry.target as string;
     const nft = new Contract(pick.contract, [
@@ -94,8 +100,11 @@ export class Client {
       try {
         const cur: string = await nft.getApproved(pick.tokenId);
         tokenApproved = cur?.toLowerCase() === registryAddress.toLowerCase();
-      } catch { /* some ERC721s may lack getApproved */ }
+      } catch {
+        // Some ERC721s may revert on getApproved — ignore and proceed to approve
+      }
       if (!tokenApproved) {
+        console.log(`Approving registry contract ${shortAddr(registryAddress)} to manage your Device NFT...`);
         const txA = await nft.approve(registryAddress, pick.tokenId);
         await txA.wait();
       }
@@ -116,10 +125,11 @@ export class Client {
       v, r, s
     ]);
 
+    console.log(`Submitting registration transaction to the blockchain...`);
+
     const tx = await ownerWallet.sendTransaction({ to: registryAddress, data, value });
-    console.log(`Submitted registration: ${tx.hash}`);
     await tx.wait();
-    console.log('Registration confirmed. Starting operation...');
+    console.log('Registration confirmed. Starting drone operation...');
 
     this.device.startOperationFlow();
   }

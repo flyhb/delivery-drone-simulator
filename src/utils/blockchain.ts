@@ -38,7 +38,7 @@ export function getProvider(): JsonRpcProvider {
  * minimal ABI contains only the functions needed by the simulator.  If
  * IOID_REGISTRY is not provided, this function throws.
  */
-export function getRegistry(provider: JsonRpcProvider): Contract {
+export async function getRegistry(provider: JsonRpcProvider): Promise<Contract> {
 
   // Minimal ABI for the ioIDRegistry used by the simulator
   const REGISTRY_ABI = [
