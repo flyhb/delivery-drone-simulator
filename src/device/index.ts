@@ -6,7 +6,7 @@ import { Device } from './Device';
 
 async function main(): Promise<void> {
   const provider = getProvider();
-  const registry = getRegistry(provider);
+  const registry = await getRegistry(provider);
   const device = new Device(provider, registry);
   console.log(`Device address: ${device.address()}`);
   if (await device.isRegistered()) {

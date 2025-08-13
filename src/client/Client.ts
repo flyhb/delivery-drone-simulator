@@ -5,17 +5,25 @@ import { Device } from '../device/Device';
 import {
   discoverOwnedChoicesFromStore,
   readPriceWei
-} from './storeDiscovery';
+} from './deviceNFTDiscovery';
 
 export class Client {
+  private initialized = false;
   private provider: ethers.JsonRpcProvider;
-  private registry: Contract;
-  private device: Device;
+  private registry!: Contract;
+  private device!: Device;
 
   constructor() {
     this.provider = getProvider();
-    this.registry = getRegistry(this.provider);
+  }
+
+  private async init(): Promise<void> {
+    if (this.initialized) return;
+        
+    this.registry = await getRegistry(this.provider);
     this.device = new Device(this.provider, this.registry);
+
+    this.initialized = true;
   }
 
   private async ask(prompt: string): Promise<string> {
@@ -24,6 +32,9 @@ export class Client {
   }
 
   public async run(): Promise<void> {
+    await this.init();
+
+    console.log('Device booting...');
     console.log(`Device address: ${this.device.address()}`);
 
     if (await this.device.isRegistered()) {

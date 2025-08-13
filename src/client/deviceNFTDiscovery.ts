@@ -17,7 +17,7 @@ const STORE_ABI = [
   'function project() view returns (address)',
   'function price() view returns (uint256)',
   'function projectDeviceContract(uint256) view returns (address)',
-  'function deviceContractProject(address) view returns (uint256)'
+  //'function deviceContractProject(address) view returns (uint256)'
 ];
 
 const PROJECT_ABI = [
