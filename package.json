@@ -9,13 +9,11 @@
     "simulate": "ts-node src/client/index.ts"
   },
   "devDependencies": {
-    "@types/node": "^24.2.1",
     "ts-node": "^10.9.1",
     "typescript": "^5.2.2"
   },
   "dependencies": {
     "dotenv": "^17.2.1",
-    "enquirer": "^2.4.1",
     "ethers": "^6.15.0"
   }
 }

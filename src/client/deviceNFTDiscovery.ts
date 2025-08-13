@@ -11,10 +11,6 @@ export type OwnedChoice = {
   projectName: string | null;
   contract: string;
   tokenId: bigint;
-
-  // NEW: enriched metadata for menu labels
-  nftName?: string;
-  nftSymbol?: string;
 };
 
 const STORE_ABI = [
@@ -33,12 +29,6 @@ const PROJECT_ABI = [
 const ERC721_ENUM_OWNER_ABI = [
   'function balanceOf(address) view returns (uint256)',
   'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)',
-];
-
-// NEW: minimal ERC-721 metadata ABI for name/symbol
-const ERC721_META_ABI = [
-  'function name() view returns (string)',
-  'function symbol() view returns (string)'
 ];
 
 function isAddr(x: string | null | undefined): x is string {
@@ -91,7 +81,7 @@ export async function listOwnedTokensEnumerable(
   const bal = await nft.balanceOf(owner) as bigint;
   const out: bigint[] = [];
   for (let i = 0n; i < bal; i++) {
-    const tidStr = await tryCall<string>(nft, 'tokenOfOwnerByIndex', [owner, i]);
+    const tidStr = await tryCall<string>(nft, "tokenOfOwnerByIndex", [owner, i]);
     if (tidStr !== null) {
       out.push(BigInt(tidStr));
     }
@@ -99,20 +89,7 @@ export async function listOwnedTokensEnumerable(
   return out;
 }
 
-// --- NEW: helper to fetch name/symbol with graceful failure ---
-async function fetchNameSymbol(
-  provider: ethers.Provider,
-  nftAddr: string
-): Promise<{ nftName?: string; nftSymbol?: string }> {
-  const meta = new Contract(nftAddr, ERC721_META_ABI, provider);
-  let nftName: string | undefined;
-  let nftSymbol: string | undefined;
-  try { nftName = await meta.name(); } catch {}
-  try { nftSymbol = await meta.symbol(); } catch {}
-  return { nftName, nftSymbol };
-}
-
-/** Full discovery: ioIDStore → Project list → deviceNFT per project → owner’s tokens (+ NFT name/symbol). */
+/** Full discovery: ioIDStore → Project list → deviceNFT per project → owner’s tokens. */
 export async function discoverOwnedChoicesFromStore(
   provider: ethers.Provider,
   storeAddr: string,
@@ -121,28 +98,15 @@ export async function discoverOwnedChoicesFromStore(
   const rows = await listProjectsFromStore(provider, storeAddr);
   const choices: OwnedChoice[] = [];
 
-  // cache metadata fetch per NFT contract to avoid duplicate RPCs
-  const metaCache = new Map<string, Promise<{ nftName?: string; nftSymbol?: string }>>();
-
   for (const r of rows) {
     if (!isAddr(r.deviceNFT)) continue;
-
-    if (!metaCache.has(r.deviceNFT!)) {
-      metaCache.set(r.deviceNFT!, fetchNameSymbol(provider, r.deviceNFT!));
-    }
-    const metaP = metaCache.get(r.deviceNFT!)!;
-
     const tokenIds = await listOwnedTokensEnumerable(provider, r.deviceNFT!, owner);
-    const { nftName, nftSymbol } = await metaP;
-
     for (const tid of tokenIds) {
       choices.push({
         contract: r.deviceNFT!,
         tokenId: tid,
         projectId: r.projectId,
-        projectName: r.name,
-        nftName,
-        nftSymbol
+        projectName: r.name
       });
     }
   }

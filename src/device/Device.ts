@@ -1,5 +1,7 @@
 import { Wallet, ethers, Contract } from 'ethers';
 import { readConfig, writeConfig } from '../config';
+import { logInfo, logWarn } from '../utils/logger';
+import { HUMMINGBIRD_ABI } from '../utils/abis';
 
 /**
  * Represents the firmware running on a physical device.  It manages a
@@ -107,10 +109,73 @@ export class Device {
    * real firmware this is where sensors would be read and actuators
    * controlled.
    */
-  public startOperationFlow(): void {
-    console.log(`Device ${this.wallet.address} is now operational.`);
-    setInterval(() => {
-      console.log(`[${new Date().toISOString()}] Device heartbeat...`);
-    }, 5000);
+  public startOperationFlow(intervalMs: number = 60000): void {
+    const hbAddr = process.env.HUMMINGBIRD;
+    if (!hbAddr || !/^0x[0-9a-fA-F]{40}$/.test(hbAddr)) {
+      throw new Error('HUMMINGBIRD must be set in .env (0x-address)');
+    }
+    const hb = new Contract(hbAddr, HUMMINGBIRD_ABI, this.wallet);
+
+    // cache last values to decide when to send sentinels
+    let lastLat: bigint | undefined;
+    let lastLon: bigint | undefined;
+    let lastReady: boolean | undefined;
+
+    // choose initial demo coordinates (Boston) unless provided via env
+    const envLat = process.env.INIT_LAT_E7;
+    const envLon = process.env.INIT_LON_E7;
+    const envReady = process.env.INIT_READY;
+    let lat: bigint = envLat ? BigInt(envLat) : BigInt(Math.round(42.3601 * 1e7));
+    let lon: bigint = envLon ? BigInt(envLon) : BigInt(Math.round(-71.0589 * 1e7));
+    let ready: boolean = envReady === '0' ? false : true;
+
+    const INT256_MIN = -(1n << 255n);
+    const READY_UNCHANGED = -1n;
+
+    const jitter = () => {
+      // ±10 micro-degrees occasionally; mostly 0
+      if (Math.random() < 0.7) return 0n;
+      const delta = Math.floor(Math.random() * 21) - 10; // -10..+10
+      return BigInt(delta);
+    };
+    const maybeFlip = (cur: boolean) => (Math.random() < 0.1 ? !cur : cur);
+
+    const tick = async () => {
+      try {
+        // evolve demo values a tiny bit
+        const nextLat = lat + jitter();
+        const nextLon = lon + jitter();
+        const nextReady = maybeFlip(ready);
+        const first = (lastLat === undefined) || (lastLon === undefined) || (lastReady === undefined);
+
+        const latArg = first ? nextLat : (nextLat === lastLat ? INT256_MIN : nextLat);
+        const lonArg = first ? nextLon : (nextLon === lastLon ? INT256_MIN : nextLon);
+        const readyArg = first ? (nextReady ? 1n : 0n) : (nextReady === lastReady ? READY_UNCHANGED : (nextReady ? 1n : 0n));
+        const ts = BigInt(Math.floor(Date.now() / 1000));
+
+        const tx = await hb.reportLiveness(latArg, lonArg, readyArg, ts);
+        await tx.wait();
+
+        // Log and scale latitude and longitude to 1e7 precision
+        console.log(
+          `${new Date(Number(ts) * 1000).toISOString()} ` +
+          `[Heartbeat] lat: ${(Number(nextLat) / 1e7).toFixed(7)}, ` +
+          `lon: ${(Number(nextLon) / 1e7).toFixed(7)}, ` +
+          `ready: ${nextReady ? 'yes' : 'no'}, ts: ${ts}`
+        );
+
+        // persist
+        lat = nextLat; lon = nextLon; ready = nextReady;
+        lastLat = nextLat; lastLon = nextLon; lastReady = nextReady;
+      } catch (e) {
+        logWarn(`Heartbeat failed: ${(e as any)?.message ?? e}`);
+      } finally {
+        setTimeout(tick, intervalMs);
+      }
+    };
+
+    // kick off
+    logInfo(`Device ${this.address()} is now operational.`);
+    void tick();
   }
 }
