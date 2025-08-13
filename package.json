@@ -9,6 +9,7 @@
     "simulate": "ts-node src/client/index.ts"
   },
   "devDependencies": {
+    "@types/node": "^24.2.1",
     "ts-node": "^10.9.1",
     "typescript": "^5.2.2"
   },
