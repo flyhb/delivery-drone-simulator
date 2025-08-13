@@ -4,8 +4,9 @@
   "description": "Delivery drone device simulator for ioID",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
-    "start": "ts-node src/client/index.ts"
+    "build": "tsc -p .",
+    "start": "ts-node src/client/index.ts",
+    "simulate": "ts-node src/client/index.ts"
   },
   "devDependencies": {
     "ts-node": "^10.9.1",
