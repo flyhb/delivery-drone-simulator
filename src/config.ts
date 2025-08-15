@@ -23,6 +23,16 @@ export interface DeviceConfig {
    */
   homeLatE7?: string;
   homeLonE7?: string;
+
+  /**
+   * Optional travel speed in miles per hour for the simulated
+   * drone.  When present the device will move at this speed
+   * between waypoints in the operation flow.  If omitted the
+   * simulator falls back to an environment variable (SPEED_MPH)
+   * or a default value.  A value of 10 corresponds to roughly
+   * 10 miles per hour.
+   */
+  speedMph?: number;
 }
 
 const defaultPath = path.join(process.cwd(), 'device-config.json');

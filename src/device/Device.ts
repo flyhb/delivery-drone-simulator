@@ -3,6 +3,7 @@ import https from 'https';
 import { readConfig, writeConfig } from '../config';
 import { logInfo, logWarn } from '../utils/logger';
 import { HUMMINGBIRD_ABI } from '../utils/abis';
+import { Navigator } from './Navigator';
 
 /**
  * Represents the firmware running on a physical device.  It manages a
@@ -262,6 +263,36 @@ export class Device {
     let currentLat: bigint = lat;
     let currentLon: bigint = lon;
 
+    // Determine the movement speed for the drone.  Prefer the value
+    // configured in device‑config.json, otherwise fall back to an
+    // environment variable or a default of 10 mph.  Parsing is
+    // tolerant of both numeric and string representations.
+    const speedMph: number = cfg?.speedMph !== undefined
+      ? Number(cfg.speedMph)
+      : process.env.SPEED_MPH
+      ? parseFloat(process.env.SPEED_MPH)
+      : 10;
+
+    // Instantiate a navigator that will manage gradual movement
+    // between coordinates.  The navigator invokes the provided
+    // callback after each step to update the drone's location and
+    // emit a progress log whenever the drone is not idle.
+    const navigator = new Navigator(currentLat, currentLon, speedMph, (newLat: bigint, newLon: bigint) => {
+      lat = newLat;
+      lon = newLon;
+      currentLat = newLat;
+      currentLon = newLon;
+      if (droneStatus !== 'idle') {
+        logInfo(
+          `Drone ${this.address()} en route; lat: ${(
+            Number(lat) / 1e7
+          ).toFixed(7)}, lon: ${(
+            Number(lon) / 1e7
+          ).toFixed(7)}, status: ${droneStatus}`
+        );
+      }
+    });
+
     // A set of request IDs that this drone has already proposed on.
     // Prevents duplicate proposals.
     const proposedRequests = new Set<string>();
@@ -392,7 +423,6 @@ export class Device {
       // Retrieve stored pickup/drop coordinates if available
       let info = requestInfo[idStr];
       if (!info) {
-        // fallback: fetch from contract if not in map
         try {
           const req = await (hb as any).getRequest(requestId);
           if (req) {
@@ -416,114 +446,105 @@ export class Device {
         logWarn(`Missing location info for request ${idStr}`);
       }
       try {
-        // Step 1: start delivery – move to pickup
+        // Begin delivery: mark as heading to pickup and inform the contract.
         ready = false;
         droneStatus = 'toPickup';
-        if (info) {
-          lat = info.pickupLat;
-          lon = info.pickupLon;
-          currentLat = lat;
-          currentLon = lon;
-          // Log status and new location when heading to pickup
-          logInfo(
-            `Drone ${this.address()} heading to pickup; lat: ${(
-              Number(lat) /
-              1e7
-            ).toFixed(7)}, lon: ${(
-              Number(lon) /
-              1e7
-            ).toFixed(7)}, status: ${droneStatus}`
-          );
-        }
+        logInfo("Proposal accepted by the user.");
+        logInfo(
+          `Drone ${this.address()} heading to pickup; lat: ${(
+            Number(lat) / 1e7
+          ).toFixed(7)}, lon: ${(
+            Number(lon) / 1e7
+          ).toFixed(7)}, status: ${droneStatus}`
+        );
         if (typeof (hb as any).startDelivery === 'function') {
-          const tx = await (hb as any).startDelivery(requestId);
-          await tx.wait?.();
-          logInfo(`Started delivery ${idStr}`);
-        }
-      } catch (err) {
-        logWarn(`startDelivery failed for ${idStr}: ${(err as any)?.message ?? err}`);
-      }
-      // Step 2: package picked
-      setTimeout(async () => {
-        try {
-          droneStatus = 'toDropoff';
-          // Log status at pickup
-          logInfo(
-            `Drone ${this.address()} picked up package; lat: ${(
-              Number(lat) /
-              1e7
-            ).toFixed(7)}, lon: ${(
-              Number(lon) /
-              1e7
-            ).toFixed(7)}, status: ${droneStatus}`
-          );
-          if (typeof (hb as any).packagePicked === 'function') {
-            const tx = await (hb as any).packagePicked(requestId);
-            await tx.wait?.();
-            logInfo(`Package picked for ${idStr}`);
-          }
-        } catch (err) {
-          logWarn(`packagePicked failed for ${idStr}: ${(err as any)?.message ?? err}`);
-        }
-        // Step 3: package dropped
-        setTimeout(async () => {
           try {
-            if (info) {
-              lat = info.dropLat;
-              lon = info.dropLon;
-              currentLat = lat;
-              currentLon = lon;
+            const tx = await (hb as any).startDelivery(requestId);
+            if (tx && typeof (tx as any).wait === 'function') {
+              await (tx as any).wait();
             }
-            droneStatus = 'returning';
-            // Log status at dropoff
-            logInfo(
-              `Drone ${this.address()} dropped off package; lat: ${(
-                Number(lat) /
-                1e7
-              ).toFixed(7)}, lon: ${(
-                Number(lon) /
-                1e7
-              ).toFixed(7)}, status: ${droneStatus}`
-            );
-            if (typeof (hb as any).packageDropped === 'function') {
-              const tx = await (hb as any).packageDropped(requestId);
-              await tx.wait?.();
-              logInfo(`Package dropped for ${idStr}`);
+            logInfo(`Started delivery ${idStr}`);
+          } catch (err) {
+            logWarn(`startDelivery failed for ${idStr}: ${(err as any)?.message ?? err}`);
+          }
+        }
+        // Move gradually to the pickup location
+        if (info) {
+          await navigator.moveTo(info.pickupLat, info.pickupLon);
+        }
+        // Package picked: update status and inform contract
+        droneStatus = 'toDropoff';
+        logInfo(
+          `Drone ${this.address()} picked up package; lat: ${(
+            Number(lat) / 1e7
+          ).toFixed(7)}, lon: ${(
+            Number(lon) / 1e7
+          ).toFixed(7)}, status: ${droneStatus}`
+        );
+        if (typeof (hb as any).packagePicked === 'function') {
+          try {
+            const tx = await (hb as any).packagePicked(requestId);
+            if (tx && typeof (tx as any).wait === 'function') {
+              await (tx as any).wait();
             }
+            logInfo(`Package picked for ${idStr}`);
+          } catch (err) {
+            logWarn(`packagePicked failed for ${idStr}: ${(err as any)?.message ?? err}`);
+          }
+        }
+        // Wait briefly to simulate loading time at pickup
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        // Move to dropoff location
+        if (info) {
+          await navigator.moveTo(info.dropLat, info.dropLon);
+        }
+        // Package dropped: update status and inform contract
+        droneStatus = 'returning';
+        logInfo(
+          `Drone ${this.address()} dropped off package; lat: ${(
+            Number(lat) / 1e7
+          ).toFixed(7)}, lon: ${(
+            Number(lon) / 1e7
+          ).toFixed(7)}, status: ${droneStatus}`
+        );
+        if (typeof (hb as any).packageDropped === 'function') {
+          try {
+            const tx = await (hb as any).packageDropped(requestId);
+            if (tx && typeof (tx as any).wait === 'function') {
+              await (tx as any).wait();
+            }
+            logInfo(`Package dropped for ${idStr}`);
           } catch (err) {
             logWarn(`packageDropped failed for ${idStr}: ${(err as any)?.message ?? err}`);
           }
-          // Step 4: complete delivery and return home
-          setTimeout(async () => {
-            try {
-              // move back home
-              lat = homeLat;
-              lon = homeLon;
-              currentLat = lat;
-              currentLon = lon;
-              ready = true;
-              droneStatus = 'idle';
-              // Log status upon returning home
-              logInfo(
-                `Drone ${this.address()} returned home; lat: ${(
-                  Number(lat) /
-                  1e7
-                ).toFixed(7)}, lon: ${(
-                  Number(lon) /
-                  1e7
-                ).toFixed(7)}, status: ${droneStatus}`
-              );
-              if (typeof (hb as any).completeDelivery === 'function') {
-                const tx = await (hb as any).completeDelivery(requestId);
-                await tx.wait?.();
-                logInfo(`Completed delivery ${idStr}`);
-              }
-            } catch (err) {
-              logWarn(`completeDelivery failed for ${idStr}: ${(err as any)?.message ?? err}`);
+        }
+        // Wait briefly to simulate unloading time at dropoff
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        // Return home
+        await navigator.moveTo(homeLat, homeLon);
+        ready = true;
+        droneStatus = 'idle';
+        logInfo(
+          `Drone ${this.address()} returned home; lat: ${(
+            Number(lat) / 1e7
+          ).toFixed(7)}, lon: ${(
+            Number(lon) / 1e7
+          ).toFixed(7)}, status: ${droneStatus}`
+        );
+        if (typeof (hb as any).completeDelivery === 'function') {
+          try {
+            const tx = await (hb as any).completeDelivery(requestId);
+            if (tx && typeof (tx as any).wait === 'function') {
+              await (tx as any).wait();
             }
-          }, 5000);
-        }, 5000);
-      }, 5000);
+            logInfo(`Completed delivery ${idStr}`);
+          } catch (err) {
+            logWarn(`completeDelivery failed for ${idStr}: ${(err as any)?.message ?? err}`);
+          }
+        }
+      } catch (outerErr) {
+        logWarn(`Delivery handling failed for ${idStr}: ${(outerErr as any)?.message ?? outerErr}`);
+      }
     };
 
     /**
@@ -651,6 +672,28 @@ export class Device {
             if (!req) {
               continue;
             }
+            // Determine the current status of the request and the assigned drone.  If
+            // the status is not Open (0) then we should not propose.  If the
+            // request is already Proposed (status 1) and assigned to this
+            // drone, mark it in the tracking set to prevent re-proposing.
+            try {
+              const statusVal: any = req.status !== undefined ? req.status : req[9];
+              const statusNum = Number(statusVal);
+              const droneAddrVal: any = req.drone !== undefined ? req.drone : req[8];
+              const droneLower = String(droneAddrVal).toLowerCase();
+              if (statusNum !== 0) {
+                if (statusNum === 1) {
+                  const myLower = this.wallet.address.toLowerCase();
+                  if (droneLower === myLower) {
+                    proposedRequests.add(idStr);
+                    logInfo(`Request ${idStr} already proposed by this drone; waiting for acceptance.`);
+                  }
+                }
+                continue;
+              }
+            } catch {
+              // ignore errors in status extraction
+            }
             // Extract fields from the struct.  Use named properties if
             // present, otherwise fall back to numeric indices.
             const pickupLatE7 = req.pickupLatE7 ?? req.pickupLat ?? req[2];
@@ -721,7 +764,14 @@ export class Device {
             try {
               if (typeof (hb as any).proposeDelivery === 'function') {
                 const tx = await (hb as any).proposeDelivery(reqId, priceWei);
-                await (tx === null || tx === void 0 ? void 0 : tx.wait)();
+                // Guard the wait call; some providers return a bare transaction
+                if (tx && typeof (tx as any).wait === 'function') {
+                  try {
+                    await (tx as any).wait();
+                  } catch {
+                    // ignore wait errors; continue
+                  }
+                }
                 logInfo(`Proposed delivery ${idStr} @ ${priceWei.toString()} wei`);
                 proposedRequests.add(idStr);
               }
@@ -783,7 +833,9 @@ export class Device {
         const ts = BigInt(Math.floor(Date.now() / 1000));
 
         const tx = await hb.reportLiveness(latArg, lonArg, readyArg, ts);
-        await tx.wait?.();
+        if (tx && typeof (tx as any).wait === 'function') {
+          await (tx as any).wait();
+        }
 
         // Log the heartbeat with human‑readable coordinates and current status.  We
         // include the droneStatus so operators can observe whether the

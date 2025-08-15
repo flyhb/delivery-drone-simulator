@@ -7,6 +7,7 @@ import {
   discoverOwnedChoicesFromStore,
   readPriceWei
 } from './deviceNFTDiscovery';
+import { promptSelect } from '../utils/ui';
 
 export class Client {
   private initialized = false;
@@ -70,14 +71,27 @@ export class Client {
       const name = c.projectName ? ` — ${c.projectName}` : '';
       console.log(`[${idx + 1}] ${c.contract}  #${c.tokenId.toString()}  (project ${c.projectId.toString()}${name})`);
     });
-
-    let idx = -1;
-    while (idx < 0 || idx >= choices.length) {
-      const ans = await this.ask('Select NFT to register (number): ');
-      const n = Number(ans);
-      if (Number.isInteger(n) && n >= 1 && n <= choices.length) idx = n - 1;
+    // Use interactive arrow menu if available.  Fallback to numeric prompt if
+    // the terminal does not support raw mode.  Each option displays the
+    // contract, tokenId and project name.
+    const optionStrings = choices.map((c) => {
+      const name = c.projectName ? ` — ${c.projectName}` : '';
+      return `${c.contract}  #${c.tokenId.toString()}  (project ${c.projectId.toString()}${name})`;
+    });
+    let selected = -1;
+    try {
+      selected = await promptSelect('Select NFT to register:', optionStrings);
+    } catch (err) {
+      // If interactive selection fails, fall back to numeric prompt
+      let idxNum = -1;
+      while (idxNum < 0 || idxNum >= choices.length) {
+        const ans = await this.ask('Select NFT to register (number): ');
+        const n = Number(ans);
+        if (Number.isInteger(n) && n >= 1 && n <= choices.length) idxNum = n - 1;
+      }
+      selected = idxNum;
     }
-    const pick = choices[idx];
+    const pick = choices[selected];
 
     // Device signs permit for this owner
     const { v, r, s, hash, uri } = await this.device.signPermit(ownerWallet.address);
