@@ -14,6 +14,15 @@ export interface DeviceConfig {
    * key will be generated and stored automatically.
    */
   devicePrivateKey: string;
+  /**
+   * Optional home latitude and longitude in E7 (degrees ×1e7).  When
+   * present these coordinates define the drone's home base.  They
+   * are stored as strings to preserve precision of big integers in
+   * JSON.  On first run these values may be populated automatically
+   * using the host's geolocation (based on its IP address).
+   */
+  homeLatE7?: string;
+  homeLonE7?: string;
 }
 
 const defaultPath = path.join(process.cwd(), 'device-config.json');
