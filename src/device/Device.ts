@@ -1,9 +1,11 @@
-import { Wallet, ethers, Contract } from 'ethers';
+import { Wallet, ethers, Contract, id } from 'ethers';
 import https from 'https';
-import { readConfig, writeConfig } from '../config';
+import { readConfig, writeConfig, DeviceConfig } from '../config';
 import { logInfo, logWarn } from '../utils/logger';
 import { HUMMINGBIRD_ABI } from '../utils/abis';
 import { Navigator } from './Navigator';
+import { getWalletLocation } from "../utils/walletLocation";
+
 
 /**
  * Represents the firmware running on a physical device.  It manages a
@@ -15,12 +17,15 @@ export class Device {
   public wallet: Wallet;
   private provider: ethers.JsonRpcProvider;
   private registry: Contract;
+  private cfg: DeviceConfig;
 
   constructor(provider: ethers.JsonRpcProvider, registry: Contract) {
     this.provider = provider;
     this.registry = registry;
-    const cfg = readConfig();
-    if (!cfg || !cfg.devicePrivateKey) {
+
+    this.cfg = readConfig();
+
+    if (!this.cfg.devicePrivateKey) {
       // Generate a random wallet and persist it
       const randomWallet = Wallet.createRandom();
       // Create a new Wallet instance from the generated private key.  In
@@ -29,57 +34,47 @@ export class Device {
       // Wallet ensures the types align.
       const generated = new Wallet(randomWallet.privateKey, provider);
       this.wallet = generated;
-      writeConfig({ devicePrivateKey: randomWallet.privateKey });
+      this.cfg.devicePrivateKey = generated.privateKey;
       console.log(`Generated new device key and stored in configuration`);
+    };
 
-      // Attempt to determine and persist a home location based on the host IP
-      try {
-        const geoPromise = new Promise<{ lat: string; lon: string }>((resolve, reject) => {
-          const req = https.get('https://ipinfo.io/json', (res) => {
-            let data = '';
-            res.on('data', (chunk) => (data += chunk));
-            res.on('end', () => {
-              try {
-                const json = JSON.parse(data);
-                if (json && json.loc && typeof json.loc === 'string') {
-                  const parts = json.loc.split(',');
-                  if (parts.length === 2) {
-                    resolve({ lat: parts[0], lon: parts[1] });
-                    return;
-                  }
-                }
-                reject(new Error('invalid geolocation response'));
-              } catch (err) {
-                reject(err);
-              }
-            });
-          });
-          req.on('error', (err) => reject(err));
-        });
-        geoPromise
-          .then(({ lat, lon }) => {
-            const latNum = parseFloat(lat);
-            const lonNum = parseFloat(lon);
-            if (!isNaN(latNum) && !isNaN(lonNum)) {
-              const cfg2 = readConfig();
-              if (cfg2) {
-                cfg2.homeLatE7 = String(Math.round(latNum * 1e7));
-                cfg2.homeLonE7 = String(Math.round(lonNum * 1e7));
-                writeConfig(cfg2);
-              }
-              console.log(`Determined and stored home location via IP geolocation: lat ${latNum.toFixed(6)}, lon ${lonNum.toFixed(6)}`);
-            }
-          })
-          .catch((err) => {
-            console.warn(`Geolocation fetch failed: ${err?.message ?? err}`);
-          });
-      } catch {
-        // ignore geolocation errors silently
-      }
-    } else {
-      this.wallet = new Wallet(cfg.devicePrivateKey, provider);
+    // Create a Wallet instance from the private key
+    this.wallet = new Wallet(this.cfg.devicePrivateKey, provider);
+
+    if (!this.cfg.maxDistanceKm) this.cfg.maxDistanceKm = 8; // Default to 8 km if not specified
+
+    // generates a home location in boston downtown if not present
+    if (!this.cfg.homeLatE7 || !this.cfg.homeLonE7) {
+      const { lat, lon } = getWalletLocation(this.wallet.address);
+      this.cfg.homeLatE7 = String(lat);
+      this.cfg.homeLonE7 = String(lon);
+      console.log(`Set default home location to downtown Boston: lat ${lat}, lon ${lon}`);
     }
-  }
+
+    // Set a default drone speed if not specified
+    if (!this.cfg.speedMph) {
+      this.cfg.speedMph = 25; // Default to 25 mph
+      console.log(`Set default speed to ${this.cfg.speedMph} mph`);
+    }
+
+    // Write the updated configuration back to disk
+    try {
+      writeConfig(this.cfg);
+    } catch (err) {
+      console.error(`Failed to write device configuration: ${(err as Error).message}`);
+    }
+}
+
+
+public getConfig(): DeviceConfig {
+  return {
+    devicePrivateKey: this.cfg.devicePrivateKey,
+    homeLatE7: this.cfg.homeLatE7,
+    homeLonE7: this.cfg.homeLonE7,
+    speedMph: this.cfg.speedMph,
+    maxDistanceKm: this.cfg.maxDistanceKm
+  };
+}
 
   /**
    * Returns the device's public address.
@@ -157,6 +152,7 @@ export class Device {
    * controlled.
    */
   public async startOperationFlow(intervalMs: number = 60000): Promise<void> {
+
     const hbAddr = process.env.HUMMINGBIRD;
     if (!hbAddr || !/^0x[0-9a-fA-F]{40}$/.test(hbAddr)) {
       throw new Error('HUMMINGBIRD must be set in .env (0x-address)');
@@ -168,110 +164,27 @@ export class Device {
     let lastLon: bigint | undefined;
     let lastReady: boolean | undefined;
 
-    // determine home coordinates.  We prefer values in the device
-    // configuration, falling back to environment variables.  If
-    // neither are present (first run) we attempt to fetch the host
-    // geolocation based on its IP address using ipinfo.io.  Fetched
-    // coordinates are stored back into the configuration for future
-    // runs.  Ready is initially true.
-    let cfg = readConfig();
-    let initLatStr: string | undefined = cfg?.homeLatE7;
-    let initLonStr: string | undefined = cfg?.homeLonE7;
-    if (!initLatStr || !initLonStr) {
-      // fallback to environment variables if provided
-      initLatStr = process.env.HOME_LAT_E7 ?? process.env.INIT_LAT_E7;
-      initLonStr = process.env.HOME_LON_E7 ?? process.env.INIT_LON_E7;
-    }
-    // If still undefined, attempt to fetch geolocation from ipinfo.io
-    if (!initLatStr || !initLonStr) {
-      try {
-        const geoData = await new Promise<{ lat: string; lon: string }>((resolve, reject) => {
-          const req = https.get('https://ipinfo.io/json', (res) => {
-            let data = '';
-            res.on('data', (chunk) => (data += chunk));
-            res.on('end', () => {
-              try {
-                const json = JSON.parse(data);
-                if (json && json.loc && typeof json.loc === 'string') {
-                  const parts = json.loc.split(',');
-                  if (parts.length === 2) {
-                    resolve({ lat: parts[0], lon: parts[1] });
-                    return;
-                  }
-                }
-                reject(new Error('invalid geolocation response'));
-              } catch (err) {
-                reject(err);
-              }
-            });
-          });
-          req.on('error', (err) => reject(err));
-        });
-        const latNum = parseFloat(geoData.lat);
-        const lonNum = parseFloat(geoData.lon);
-        if (!isNaN(latNum) && !isNaN(lonNum)) {
-          initLatStr = String(Math.round(latNum * 1e7));
-          initLonStr = String(Math.round(lonNum * 1e7));
-          // update config on success
-          if (cfg) {
-            cfg.homeLatE7 = initLatStr;
-            cfg.homeLonE7 = initLonStr;
-            writeConfig(cfg);
-          }
-          logInfo(
-            `Determined home location via IP geolocation: lat ${latNum.toFixed(6)}, lon ${lonNum.toFixed(6)}`
-          );
-        }
-      } catch (geoErr) {
-        logWarn(`Failed to determine home location via IP geolocation: ${(geoErr as any).message ?? geoErr}`);
-      }
-    }
-    // If still not defined, fall back to Boston (default)
-    let lat: bigint;
-    let lon: bigint;
-    if (initLatStr && initLonStr) {
-      lat = BigInt(initLatStr);
-      lon = BigInt(initLonStr);
-    } else {
-      lat = BigInt(Math.round(42.3601 * 1e7));
-      lon = BigInt(Math.round(-71.0589 * 1e7));
-    }
+    let lat = BigInt(this.cfg.homeLatE7);
+    let lon = BigInt(this.cfg.homeLonE7);
+
     // ready state
     let ready: boolean = true;
-    // Log the selected home location and initial status.  When the
-    // device boots the drone is idle at its home coordinates.  This
-    // message appears once on startup so operators can verify the
-    // configured home location.
-    logInfo(
-      `Home location set to lat: ${(
-        Number(lat) / 1e7
-      ).toFixed(7)}, lon: ${(
-        Number(lon) / 1e7
-      ).toFixed(7)} (degrees); status: idle`
-    );
 
-    // Save the home coordinates for returning after a delivery
-    const homeLat: bigint = lat;
-    const homeLon: bigint = lon;
-    // Track the drone's current status: 'idle' (at home), 'toPickup', 'toDropoff', 'returning'
-    let droneStatus: string = 'idle';
+    // Track the drone's current status: 'ready' (at home), 'toPickup', 'toDropoff', 'returning'
+    let droneStatus: string = 'ready';
 
     // Track the most recent latitude/longitude for computing delivery
     // distances.  These variables mirror the drone's current
     // location and are updated whenever the drone moves (e.g. when
     // starting, progressing through or completing a delivery).
-    let currentLat: bigint = lat;
-    let currentLon: bigint = lon;
+    let currentLat: bigint = BigInt(this.cfg.homeLatE7);
+    let currentLon: bigint = BigInt(this.cfg.homeLonE7);
 
     // Determine the movement speed for the drone.  Prefer the value
     // configured in device‑config.json, otherwise fall back to an
     // environment variable or a default of 10 mph.  Parsing is
     // tolerant of both numeric and string representations.
-    const speedMph: number = cfg?.speedMph !== undefined
-      ? Number(cfg.speedMph)
-      : process.env.SPEED_MPH
-      ? parseFloat(process.env.SPEED_MPH)
-      : 10;
+    const speedMph: number = this.cfg?.speedMph;
 
     // Instantiate a navigator that will manage gradual movement
     // between coordinates.  The navigator invokes the provided
@@ -282,7 +195,7 @@ export class Device {
       lon = newLon;
       currentLat = newLat;
       currentLon = newLon;
-      if (droneStatus !== 'idle') {
+      if (droneStatus !== 'ready') {
         logInfo(
           `Drone ${this.address()} en route; lat: ${(
             Number(lat) / 1e7
@@ -405,7 +318,7 @@ export class Device {
         logWarn(`Proposal status polling error: ${(err as any)?.message ?? err}`);
       } finally {
         // schedule next status poll in 30 seconds
-        setTimeout(pollProposalStatus, 30000);
+        setTimeout(pollProposalStatus, 5000);
       }
     };
 
@@ -521,9 +434,9 @@ export class Device {
         // Wait briefly to simulate unloading time at dropoff
         await new Promise((resolve) => setTimeout(resolve, 5000));
         // Return home
-        await navigator.moveTo(homeLat, homeLon);
+        await navigator.moveTo(BigInt(this.cfg.homeLatE7), BigInt(this.cfg.homeLonE7));
         ready = true;
-        droneStatus = 'idle';
+        droneStatus = 'ready';
         logInfo(
           `Drone ${this.address()} returned home; lat: ${(
             Number(lat) / 1e7
@@ -578,11 +491,9 @@ export class Device {
         // globally open requests and requests targeted to this device.
         let openIds: any[] = [];
         try {
-          if (typeof (hb as any).getOpenRequests === 'function') {
-            const ids = await (hb as any).getOpenRequests();
-            if (Array.isArray(ids)) {
-              openIds = openIds.concat(ids);
-            }
+          const ids = await (hb as any).getOpenRequests();
+          if (Array.isArray(ids)) {
+            openIds = openIds.concat(ids);
           }
         } catch (e) {
           logWarn(`Failed to fetch open requests: ${(e as any)?.message ?? e}`);
@@ -593,11 +504,9 @@ export class Device {
           }
         }
         try {
-          if (typeof (hb as any).getOpenRequestsFor === 'function') {
-            const ids = await (hb as any).getOpenRequestsFor(this.wallet.address);
-            if (Array.isArray(ids)) {
-              openIds = openIds.concat(ids);
-            }
+          const ids = await (hb as any).getOpenRequestsFor(this.wallet.address);
+          if (ids.length > 0) {
+            openIds = openIds.concat(ids);
           }
         } catch (e) {
           logWarn(`Failed to fetch targeted requests: ${(e as any)?.message ?? e}`);
@@ -634,18 +543,17 @@ export class Device {
           try {
             const reqId = BigInt(idStr);
             let req: any;
-            if (typeof (hb as any).getRequest === 'function') {
               try {
                 req = await (hb as any).getRequest(reqId);
               } catch {
                 continue;
               }
-            }
+
             if (!req) continue;
             const statusVal: any = req.status !== undefined ? req.status : req[9];
             const statusNum = Number(statusVal);
             const statusName = statusNames[statusNum] ?? String(statusNum);
-            logInfo(`Onchain request ${idStr}: status ${statusName}`);
+            logInfo(`Onchain request ${idStr}: status ${statusName}, targeted to ${req.targetedDevice}`);
           } catch {}
         }
         // Iterate through each unique request ID
@@ -659,12 +567,7 @@ export class Device {
             // Retrieve full request details
             let req: any;
             try {
-              if (typeof (hb as any).getRequest === 'function') {
                 req = await (hb as any).getRequest(reqId);
-              } else {
-                // Without getRequest we cannot proceed
-                continue;
-              }
             } catch (e) {
               logWarn(`Failed to fetch request ${idStr}: ${(e as any)?.message ?? e}`);
               continue;
@@ -703,9 +606,9 @@ export class Device {
             // The request tuple indices follow the order defined in
             // Hummingbird.DeliveryRequest.  Index 12 = targetedDevice,
             // 13 = expiresAt, 14 = maxPrice, 15 = acceptedAt.
-            const targeted = req.targetedDevice ?? req.target ?? req[12];
+            const targeted = req.targetedDevice;
             const expiresAtVal = req.expiresAt ?? req.expiry ?? req[13];
-            const maxPrice = req.maxPrice ?? req[14];
+            const maxPrice = req.maxPrice;
             if (pickupLatE7 === undefined || pickupLonE7 === undefined || dropLatE7 === undefined || dropLonE7 === undefined) {
               continue;
             }
@@ -744,7 +647,8 @@ export class Device {
               continue;
             }
             const tripDist = computeTripDistance(currentLat, currentLon, pickupLatBn, pickupLonBn, dropLatBn, dropLonBn);
-            if (tripDist > 6) {
+            if (tripDist > this.cfg.maxDistanceKm) {
+              console.log(`Skipping request ${idStr} due to excessive distance: ${tripDist} km`);
               continue;
             }
             // Price: 0.1 HB per km, scaled to 18 decimal wei
@@ -786,7 +690,7 @@ export class Device {
         logWarn(`Delivery polling error: ${(pollErr as any)?.message ?? pollErr}`);
       } finally {
         // schedule next poll in 30 seconds
-        setTimeout(pollDeliveryRequests, 30000);
+        setTimeout(pollDeliveryRequests, 4000);
       }
     };
 
@@ -844,15 +748,15 @@ export class Device {
           `${new Date(Number(ts) * 1000).toISOString()} ` +
           `[Heartbeat] lat: ${(Number(nextLat) / 1e7).toFixed(7)}, ` +
           `lon: ${(Number(nextLon) / 1e7).toFixed(7)}, ` +
-          `ready: ${nextReady ? 'yes' : 'no'}, status: ${droneStatus}, ts: ${ts}`
+          `status: ${nextReady ? 'ready' : 'busy'}, timestamp: ${ts}`
         );
 
         // Persist last reported values
         lastLat = nextLat;
         lastLon = nextLon;
         lastReady = nextReady;
-      } catch (e) {
-        logWarn(`Heartbeat failed: ${(e as any)?.message ?? e}`);
+      } catch (e: any) {
+        logWarn(`Heartbeat failed: ${e?.message ?? e?.shortMessage ?? e}`);
       } finally {
         setTimeout(tick, intervalMs);
       }

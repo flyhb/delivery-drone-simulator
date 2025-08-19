@@ -1,3 +1,6 @@
 {
-  "devicePrivateKey": "0x106e174f5c107c00f54da7c3c20f96bbebbaddd1643af381f8059e6c8ddfd489"
+  "devicePrivateKey": "0x106e174f5c107c00f54da7c3c20f96bbebbaddd1643af381f8059e6c8ddfd489",
+  "homeLatE7": "423431244",
+  "homeLonE7": "-710758710",
+  "speedMph": 50
 }
