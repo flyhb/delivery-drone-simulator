@@ -284,6 +284,8 @@ public getConfig(): DeviceConfig {
             let req: any;
             try {
               if (typeof (hb as any).getRequest === 'function') {
+                // Wait half a second to avoid hammering the RPC
+                await new Promise((resolve) => setTimeout(resolve, 200));
                 req = await (hb as any).getRequest(reqId);
               } else {
                 continue;
@@ -544,6 +546,8 @@ public getConfig(): DeviceConfig {
             const reqId = BigInt(idStr);
             let req: any;
               try {
+                // Wait half a second to avoid hammering the RPC
+                await new Promise((resolve) => setTimeout(resolve, 200));
                 req = await (hb as any).getRequest(reqId);
               } catch {
                 continue;
@@ -567,6 +571,8 @@ public getConfig(): DeviceConfig {
             // Retrieve full request details
             let req: any;
             try {
+              // Wait half a second to avoid hammering the RPC
+                await new Promise((resolve) => setTimeout(resolve, 200));
                 req = await (hb as any).getRequest(reqId);
             } catch (e) {
               logWarn(`Failed to fetch request ${idStr}: ${(e as any)?.message ?? e}`);
@@ -757,6 +763,7 @@ public getConfig(): DeviceConfig {
         lastReady = nextReady;
       } catch (e: any) {
         logWarn(`Heartbeat failed: ${e?.message ?? e?.shortMessage ?? e}`);
+        logInfo(`Please send funds to the device wallet ${this.address()} to continue operation.`);
       } finally {
         setTimeout(tick, intervalMs);
       }
