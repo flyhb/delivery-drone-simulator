@@ -546,7 +546,7 @@ public getConfig(): DeviceConfig {
             // Retrieve full request details
             let req: any;
             try {
-              if (typeof (hb as any).getRequest === 'function') {
+              if (typeof (hb as any).getRequest === 'function') 
                 req = await (hb as any).getRequest(reqId);
             } catch (e) {
               logWarn(`Failed to fetch request ${idStr}: ${(e as any)?.message ?? e}`);
