@@ -37,7 +37,9 @@ export class Client {
     await this.init();
 
     logInfo('Device boot sequence initiated.');
-    logInfo(`Device address: ${this.device.address()}`);
+    // Log the device configuration
+    const cfg = this.device.getConfig();
+    logInfo(`Device configuration: ${JSON.stringify(cfg, null, 2)}`);
 
     if (await this.device.isRegistered()) {
       logInfo('Registration status: registered');

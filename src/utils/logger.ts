@@ -1,10 +1,10 @@
 // src/utils/logger.ts
 export function logInfo(message: string) {
-  console.log(`${new Date().toISOString()} [INFO] ${message}`);
+  console.log(`${new Date().toLocaleString()} [INFO] ${message}`);
 }
 export function logWarn(message: string) {
-  console.warn(`${new Date().toISOString()} [WARN] ${message}`);
+  console.warn(`${new Date().toLocaleString()} [WARN] ${message}`);
 }
 export function logError(message: string) {
-  console.error(`${new Date().toISOString()} [ERROR] ${message}`);
+  console.error(`${new Date().toLocaleString()} [ERROR] ${message}`);
 }

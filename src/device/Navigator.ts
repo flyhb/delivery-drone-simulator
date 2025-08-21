@@ -67,7 +67,7 @@ export class Navigator {
    * @param targetLon The target longitude in E7 (bigint)
    * @param stepMiles Approximate distance per update in miles
    */
-  public async moveTo(targetLat: bigint, targetLon: bigint, stepMiles = 0.1): Promise<void> {
+  public async moveTo(targetLat: bigint, targetLon: bigint, stepMiles = 0.01): Promise<void> {
     const targetLatNum = Number(targetLat);
     const targetLonNum = Number(targetLon);
     // Compute total distance in miles

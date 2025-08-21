@@ -21,8 +21,8 @@ export interface DeviceConfig {
    * JSON.  On first run these values may be populated automatically
    * using the host's geolocation (based on its IP address).
    */
-  homeLatE7?: string;
-  homeLonE7?: string;
+  homeLatE7: string;
+  homeLonE7: string;
 
   /**
    * Optional travel speed in miles per hour for the simulated
@@ -32,7 +32,14 @@ export interface DeviceConfig {
    * or a default value.  A value of 10 corresponds to roughly
    * 10 miles per hour.
    */
-  speedMph?: number;
+  speedMph: number;
+
+  /**
+   * Optional maximum distance in kilometers for delivery requests.
+   * If set, the device will only accept requests within this range
+   * from its current location.  Defaults to 8 km if not specified.
+   */
+  maxDistanceKm: number;
 }
 
 const defaultPath = path.join(process.cwd(), 'device-config.json');
@@ -42,12 +49,23 @@ const CONFIG_PATH = process.env.CONFIG_PATH || defaultPath;
  * Reads the device configuration from disk.  Returns null if the file
  * does not exist.
  */
-export function readConfig(): DeviceConfig | null {
+export function readConfig(): DeviceConfig {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
     return JSON.parse(raw) as DeviceConfig;
   } catch (err) {
-    return null;
+    // Return an empty config if the file does not exist
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return {
+        devicePrivateKey: '',
+        homeLatE7: '0',
+        homeLonE7: '0',
+        speedMph: 0,
+        maxDistanceKm: 0,
+      };
+    } else {
+      throw new Error(`Failed to read config from ${CONFIG_PATH}: ${(err as Error).message}`);
+    }
   }
 }
 
