@@ -19,6 +19,7 @@ The simulator is split into two distinct parts:
 1. Install dependencies:
 
    ```bash
+   git clone https://github.com/flyhb/delivery-drone-simulator.git
    cd delivery-drone-simulator
    npm install
    ```
