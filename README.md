@@ -1,8 +1,8 @@
 # Delivery Drone Station Simulator
 
-This project simulates a delivery drone station device that integrates with the ioID identity system.  It is intended as a learning reference and a starting point for projects that need to onboard physical devices into the ioID registry.
+This project simulates a delivery <b>drone station</b> that integrates with the Hummingbird contract. It’s intended as a testnet tool to validate the protocol and the user experience.
 
-The simulator is split into two distinct parts:
+The simulator consists of two parts:
 
 * **Device** – emulates the firmware running on the physical device.  It manages a persistent device key, checks registration status and signs permit messages.  Once registered it enters an example “operation” loop.
 * **Client** – represents a companion application used by the device owner or operator.  It collects the owner’s private key, coordinates the registration process and pays the ioID registration fee on behalf of the device.
@@ -24,15 +24,24 @@ The simulator is split into two distinct parts:
    npm install
    ```
 
-2. Copy the provided `.env.example` to `.env` and fill in the required values.  At minimum you need `RPC_URL`, `CHAIN_ID`, `IOID_REGISTRY`, `IOID_PRICE`, `DEVICE_CONTRACT_ADDRESS` and `DEVICE_TOKEN_ID`.  Optionally you can predefine `OWNER_PRIVATE_KEY` to avoid the runtime prompt.
+2. Create and fill `.env`
+Copy the provided `.env.example` to `.env` and fill in the required values.  
+
+- `RPC_URL`: any Bepolia RPC (see: https://chainlist.org/chain/80069)
+- `CHAIN_ID`: 80069 for Bepolia  
+- `HUMMINGBIRD`: hummingbird dapp contract address (see current deployment [here](https://github.com/flyhb/hummingbird#berachain-testnet))
+- `IOID_STORE`: ioID store contract address (see current deployment [here](https://github.com/flyhb/ioID-contracts/blob/main/chain-deployments/berachain.md))
+- `HEARTBEAT_MS`: how often the device sends a proof of liveness to the contract.
+Notes: there is currently no min/max enforced. The device address must hold <b>BERA</b> to pay gas (subject to change). Use a longer interval to save BERA, or shorter to mine more HB (currently 1 HB per proof). At **~1 proof/min, 1 BERA lasts ≈ 5 hours**.
+- `OWNER_PRIVATE_KEY`: *(optional)* your station‑owner account. It needs some BERA for the device registration fee and gas. The current registration price (low) can also be found [here](https://github.com/flyhb/ioID-contracts/blob/main/chain-deployments/berachain.md). If not set, you’ll be prompted during bootstrap.
 
 3. Build the TypeScript sources (or run directly with ts-node):
 
    ```bash
-   # To compile to JavaScript
+   # Compile to JavaScript
    npm run build
 
-   # Or run with ts-node (used by the npm start script)
+   # Or run with ts-node (used by `npm start`)
    npm start
    ```
 
@@ -40,37 +49,21 @@ The simulator is split into two distinct parts:
 
 The default start script launches the **client**.  On startup it:
 
-1. Loads or creates a persistent device key and displays the device address.
-2. Connects to the configured `ioIDRegistry` contract and checks if the device is already registered.
-3. If the device is not registered it prompts for the owner’s private key (unless `OWNER_PRIVATE_KEY` is set in the `.env`).
-4. The device signs an EIP‑712 permit authorizing the owner to register it.  The client then calls `ioIDRegistry.register(...)` with the proper parameters and registration fee.  After the transaction confirms, the device is registered.
-5. Once registered, the device enters a dummy operation loop where it prints a periodic message to the console.  In a real firmware this is where you would interact with sensors, control actuators, etc.
+1. Loads or creates a persistent device key and displays the device address. 
+**→ Copy the device address and send some BERA to it.**
 
-You can also run the device alone using the `src/device/index.ts` script.  It will report whether the device is registered and start the operation loop if so.  Otherwise it instructs you to use the client to register.
+2. Loads or creates the rest of the configuration (see `device_config.json`), including
+- GPS location of the station
+- The simulated drone speed
+- Maximum service range (longer trips will be ignored)
 
-## File structure
+3. Checks if the device is already registered on-chain.
 
-```
-delivery-drone-simulator/
-├── src/
-│   ├── client/
-│   │   ├── Client.ts      # Companion app logic (user prompts, registration)
-│   │   └── index.ts       # Client entrypoint
-│   ├── device/
-│   │   ├── Device.ts      # Device firmware simulation (key mgmt, signing)
-│   │   └── index.ts       # Device entrypoint
-│   ├── utils/
-│   │   └── blockchain.ts   # Shared helpers for provider and contract
-│   └── config.ts          # Read/write device configuration
-├── .env.example           # Environment variable template
-├── package.json           # Project metadata and scripts
-├── tsconfig.json          # TypeScript compiler options
-└── README.md              # This file
-```
+4. If the device is not registered it prompts for the owner’s private key (unless `OWNER_PRIVATE_KEY` is set in the `.env`).
 
-## Important notes
+5. Verifies that the owner holds a Hummingbird Device NFT (required for registration).
+ **→ mint one at: https://test.flyhummingbird.io/contribute**
 
-* This simulator is a simplified illustration.  In production you must handle errors, edge cases and security concerns (e.g. never hard‑code private keys, handle network failures, ensure proper error handling when calling contracts, etc.).
-* The device stores its private key and configuration in `device-config.json` (by default).  This file is created next to the running script and should be kept secret.
-* The EIP‑712 signing uses the same domain parameters as the `ioIDRegistry` contract (name `ioIDRegistry`, version `1`, chain ID from the provider and the registry address as the verifying contract).
-* The dummy operation simply logs a heartbeat message to the console.  Replace this with your actual device logic.
+6. The device signs an **EIP‑712 permit** authorizing the owner to register it.  The client then **submits the registration** tx and pays the required fee.  After confirmation, the device is registered (bound to the owner's account) and the owner receives an **ioID NFT** representing ownership and entitling them to any incentives and payments generated by the device (import the HB token address in Metamask, find the contract address [here](https://github.com/flyhb/hummingbird#berachain-testnet)).
+6. Once registered, the device enters an **operation loop** where it periodically sends proofs of liveness, and (in the simulator) can monitor incoming delivery requests and “fly” simulated missions according to the configured speed and range limits. 
+
